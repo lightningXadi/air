@@ -63,14 +63,15 @@
 <body>
   <div class="card">
     <h1>AIR</h1>
-    <p class="sub">Enter the same room code on both devices to connect.</p>
+    <p class="sub">Enter the same room code (up to 6 people) to connect.</p>
     <input id="roomInput" placeholder="Room code (e.g. mycall123)" />
     <button id="joinBtn">Join Call</button>
     <button id="hangupBtn">Hang Up</button>
     <div id="status"><span class="mic-indicator" id="micDot"></span><span id="statusText">Not connected</span></div>
+    <div id="participants" style="margin-top:10px; font-size:13px; color:#888;"></div>
   </div>
 
-  <audio id="remoteAudio" autoplay playsinline></audio>
+  <div id="audioContainer"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
@@ -80,15 +81,14 @@
     const roomInput = document.getElementById("roomInput");
     const statusText = document.getElementById("statusText");
     const micDot = document.getElementById("micDot");
-    const remoteAudio = document.getElementById("remoteAudio");
+    const audioContainer = document.getElementById("audioContainer");
+    const participantsEl = document.getElementById("participants");
 
-    let pc = null;
     let localStream = null;
     let roomId = null;
-    let peerId = null;
+    const peers = new Map(); // peerId -> RTCPeerConnection
 
     // Fetched fresh from Metered's TURN credentials API on load.
-    // These credentials rotate/expire periodically, so we fetch live instead of hardcoding them.
     let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }]; // fallback until fetch completes
 
     async function loadIceServers() {
@@ -109,6 +109,11 @@
       micDot.classList.toggle("active", micActive);
     }
 
+    function updateParticipantCount() {
+      const count = peers.size + (localStream ? 1 : 0);
+      participantsEl.textContent = count > 0 ? `${count} in call` : "";
+    }
+
     async function joinCall() {
       roomId = roomInput.value.trim();
       if (!roomId) return alert("Enter a room code first.");
@@ -125,13 +130,14 @@
       joinBtn.style.display = "none";
       hangupBtn.style.display = "block";
       roomInput.disabled = true;
-      setStatus("Waiting for the other person...", true);
+      setStatus("Waiting for others to join...", true);
 
       socket.emit("join", roomId);
     }
 
-    function createPeerConnection() {
-      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    function createPeerConnection(peerId) {
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      peers.set(peerId, pc);
 
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
@@ -142,38 +148,67 @@
       };
 
       pc.ontrack = (event) => {
-        remoteAudio.srcObject = event.streams[0];
+        let audioEl = document.getElementById("audio-" + peerId);
+        if (!audioEl) {
+          audioEl = document.createElement("audio");
+          audioEl.id = "audio-" + peerId;
+          audioEl.autoplay = true;
+          audioEl.playsInline = true;
+          audioContainer.appendChild(audioEl);
+        }
+        audioEl.srcObject = event.streams[0];
         setStatus("Connected — call in progress", true);
+        updateParticipantCount();
       };
 
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "connected") setStatus("Connected — call in progress", true);
         if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
-          setStatus("Call ended", false);
+          removePeer(peerId);
         }
       };
+
+      return pc;
     }
 
-    async function makeOffer() {
-      createPeerConnection();
+    function removePeer(peerId) {
+      const pc = peers.get(peerId);
+      if (pc) { pc.close(); peers.delete(peerId); }
+      const audioEl = document.getElementById("audio-" + peerId);
+      if (audioEl) audioEl.remove();
+      updateParticipantCount();
+      if (peers.size === 0 && localStream) {
+        setStatus("Waiting for others to join...", true);
+      }
+    }
+
+    async function callPeer(peerId) {
+      const pc = createPeerConnection(peerId);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.emit("signal", { to: peerId, data: { sdp: offer } });
     }
 
+    socket.on("joined", async ({ existingPeers }) => {
+      // Call everyone who is already in the room
+      for (const peerId of existingPeers) {
+        await callPeer(peerId);
+      }
+      updateParticipantCount();
+    });
+
     socket.on("room-full", () => {
-      alert("This room already has two people in it. Try a different code.");
+      alert("This room already has 6 people in it (max for group calls). Try a different code.");
       hangup();
     });
 
-    socket.on("peer-joined", async ({ peerId: id }) => {
-      peerId = id;
-      await makeOffer();
+    socket.on("peer-joined", async ({ peerId }) => {
+      // Existing members wait for the newcomer's offer (handled in "signal"),
+      // but we prep nothing here — newcomer initiates via callPeer.
     });
 
     socket.on("signal", async ({ from, data }) => {
-      peerId = from;
-      if (!pc) createPeerConnection();
+      let pc = peers.get(from);
+      if (!pc) pc = createPeerConnection(from);
 
       if (data.sdp) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
@@ -189,21 +224,24 @@
           console.error("ICE candidate error", e);
         }
       }
+      updateParticipantCount();
     });
 
-    socket.on("peer-left", () => {
-      setStatus("Other person left the call", false);
-      if (pc) { pc.close(); pc = null; }
+    socket.on("peer-left", ({ peerId }) => {
+      removePeer(peerId);
     });
 
     function hangup() {
       socket.emit("hangup");
-      if (pc) { pc.close(); pc = null; }
+      peers.forEach((pc) => pc.close());
+      peers.clear();
+      audioContainer.innerHTML = "";
       if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
       joinBtn.style.display = "block";
       hangupBtn.style.display = "none";
       roomInput.disabled = false;
       setStatus("Not connected", false);
+      participantsEl.textContent = "";
       socket.disconnect();
       socket.connect();
     }
