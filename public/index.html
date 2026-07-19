@@ -87,16 +87,22 @@
     let roomId = null;
     let peerId = null;
 
-    // Replace with your own STUN/TURN credentials.
-    // STUN alone is often NOT enough across different networks — you need TURN.
-    const ICE_SERVERS = [
-      { urls: "stun:stun.l.google.com:19302" },
-      {
-        urls: "turn:YOUR_TURN_DOMAIN_OR_IP:3478",
-        username: "YOUR_TURN_USERNAME",
-        credential: "YOUR_TURN_PASSWORD"
+    // Fetched fresh from Metered's TURN credentials API on load.
+    // These credentials rotate/expire periodically, so we fetch live instead of hardcoding them.
+    let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }]; // fallback until fetch completes
+
+    async function loadIceServers() {
+      try {
+        const res = await fetch("https://ashborn.metered.live/api/v1/turn/credentials?apiKey=2592e5a67b1df0493a1570c59e03510cc944");
+        const servers = await res.json();
+        if (Array.isArray(servers) && servers.length) {
+          ICE_SERVERS = servers;
+        }
+      } catch (err) {
+        console.error("Failed to load TURN credentials, falling back to STUN only:", err);
       }
-    ];
+    }
+    loadIceServers();
 
     function setStatus(text, micActive = false) {
       statusText.textContent = text;
@@ -106,6 +112,9 @@
     async function joinCall() {
       roomId = roomInput.value.trim();
       if (!roomId) return alert("Enter a room code first.");
+
+      setStatus("Setting up connection...", false);
+      await loadIceServers();
 
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
