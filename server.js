@@ -11,6 +11,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 // roomId -> Set of socket ids
 const rooms = new Map();
+const MAX_ROOM_SIZE = 6;
 
 io.on("connection", (socket) => {
   let currentRoom = null;
@@ -20,16 +21,20 @@ io.on("connection", (socket) => {
     if (!rooms.has(roomId)) rooms.set(roomId, new Set());
     const room = rooms.get(roomId);
 
-    if (room.size >= 2) {
+    if (room.size >= MAX_ROOM_SIZE) {
       socket.emit("room-full");
+      currentRoom = null;
       return;
     }
 
+    const others = [...room]; // existing members before adding self
     room.add(socket.id);
     socket.join(roomId);
 
-    const others = [...room].filter((id) => id !== socket.id);
-    socket.emit("joined", { self: socket.id });
+    // Tell the newcomer who's already in the room
+    socket.emit("joined", { self: socket.id, existingPeers: others });
+
+    // Tell existing members someone new joined
     others.forEach((id) => io.to(id).emit("peer-joined", { peerId: socket.id }));
   });
 
@@ -38,13 +43,13 @@ io.on("connection", (socket) => {
   });
 
   socket.on("hangup", () => {
-    if (currentRoom) socket.to(currentRoom).emit("peer-left");
+    if (currentRoom) socket.to(currentRoom).emit("peer-left", { peerId: socket.id });
   });
 
   socket.on("disconnect", () => {
     if (currentRoom && rooms.has(currentRoom)) {
       rooms.get(currentRoom).delete(socket.id);
-      socket.to(currentRoom).emit("peer-left");
+      socket.to(currentRoom).emit("peer-left", { peerId: socket.id });
       if (rooms.get(currentRoom).size === 0) rooms.delete(currentRoom);
     }
   });
