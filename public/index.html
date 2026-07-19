@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AIR</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0f1115;
+    color: #eee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+  }
+  .card {
+    background: #1a1d24;
+    padding: 32px;
+    border-radius: 16px;
+    width: 90%;
+    max-width: 360px;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  h1 { font-size: 22px; margin-bottom: 4px; letter-spacing: 2px; }
+  p.sub { color: #888; font-size: 13px; margin-top: 0; margin-bottom: 20px; }
+  input {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #333;
+    background: #0f1115;
+    color: #eee;
+    font-size: 15px;
+    margin-bottom: 12px;
+  }
+  button {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+  #joinBtn { background: #4f8cff; color: white; }
+  #hangupBtn { background: #ff4f4f; color: white; display:none; }
+  #status { margin-top: 16px; font-size: 14px; color: #aaa; min-height: 20px; }
+  .mic-indicator {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #444; display: inline-block; margin-right: 6px;
+    transition: background 0.15s;
+  }
+  .mic-indicator.active { background: #4fff88; }
+  audio { display: none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>AIR</h1>
+    <p class="sub">Enter the same room code on both devices to connect.</p>
+    <input id="roomInput" placeholder="Room code (e.g. mycall123)" />
+    <button id="joinBtn">Join Call</button>
+    <button id="hangupBtn">Hang Up</button>
+    <div id="status"><span class="mic-indicator" id="micDot"></span><span id="statusText">Not connected</span></div>
+  </div>
+
+  <audio id="remoteAudio" autoplay playsinline></audio>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const joinBtn = document.getElementById("joinBtn");
+    const hangupBtn = document.getElementById("hangupBtn");
+    const roomInput = document.getElementById("roomInput");
+    const statusText = document.getElementById("statusText");
+    const micDot = document.getElementById("micDot");
+    const remoteAudio = document.getElementById("remoteAudio");
+
+    let pc = null;
+    let localStream = null;
+    let roomId = null;
+    let peerId = null;
+
+    // Replace with your own STUN/TURN credentials.
+    // STUN alone is often NOT enough across different networks — you need TURN.
+    const ICE_SERVERS = [
+      { urls: "stun:stun.l.google.com:19302" },
+      {
+        urls: "turn:YOUR_TURN_DOMAIN_OR_IP:3478",
+        username: "YOUR_TURN_USERNAME",
+        credential: "YOUR_TURN_PASSWORD"
+      }
+    ];
+
+    function setStatus(text, micActive = false) {
+      statusText.textContent = text;
+      micDot.classList.toggle("active", micActive);
+    }
+
+    async function joinCall() {
+      roomId = roomInput.value.trim();
+      if (!roomId) return alert("Enter a room code first.");
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (err) {
+        return alert("Microphone permission is required: " + err.message);
+      }
+
+      joinBtn.style.display = "none";
+      hangupBtn.style.display = "block";
+      roomInput.disabled = true;
+      setStatus("Waiting for the other person...", true);
+
+      socket.emit("join", roomId);
+    }
+
+    function createPeerConnection() {
+      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("signal", { to: peerId, data: { candidate: event.candidate } });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        remoteAudio.srcObject = event.streams[0];
+        setStatus("Connected — call in progress", true);
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") setStatus("Connected — call in progress", true);
+        if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
+          setStatus("Call ended", false);
+        }
+      };
+    }
+
+    async function makeOffer() {
+      createPeerConnection();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit("signal", { to: peerId, data: { sdp: offer } });
+    }
+
+    socket.on("room-full", () => {
+      alert("This room already has two people in it. Try a different code.");
+      hangup();
+    });
+
+    socket.on("peer-joined", async ({ peerId: id }) => {
+      peerId = id;
+      await makeOffer();
+    });
+
+    socket.on("signal", async ({ from, data }) => {
+      peerId = from;
+      if (!pc) createPeerConnection();
+
+      if (data.sdp) {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        if (data.sdp.type === "offer") {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socket.emit("signal", { to: from, data: { sdp: answer } });
+        }
+      } else if (data.candidate) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } catch (e) {
+          console.error("ICE candidate error", e);
+        }
+      }
+    });
+
+    socket.on("peer-left", () => {
+      setStatus("Other person left the call", false);
+      if (pc) { pc.close(); pc = null; }
+    });
+
+    function hangup() {
+      socket.emit("hangup");
+      if (pc) { pc.close(); pc = null; }
+      if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+      joinBtn.style.display = "block";
+      hangupBtn.style.display = "none";
+      roomInput.disabled = false;
+      setStatus("Not connected", false);
+      socket.disconnect();
+      socket.connect();
+    }
+
+    joinBtn.addEventListener("click", joinCall);
+    hangupBtn.addEventListener("click", hangup);
+  </script>
+</body>
+</html>
