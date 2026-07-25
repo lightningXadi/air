@@ -16,8 +16,9 @@ const MAX_ROOM_SIZE = 6;
 io.on("connection", (socket) => {
   let currentRoom = null;
 
-  socket.on("join", (roomId) => {
+  socket.on("join", ({ roomId, name } = {}) => {
     currentRoom = roomId;
+    socket.data.name = (name || "").trim().slice(0, 24) || "Anonymous";
     if (!rooms.has(roomId)) rooms.set(roomId, new Set());
     const room = rooms.get(roomId);
 
@@ -31,11 +32,17 @@ io.on("connection", (socket) => {
     room.add(socket.id);
     socket.join(roomId);
 
-    // Tell the newcomer who's already in the room
-    socket.emit("joined", { self: socket.id, existingPeers: others });
+    // Tell the newcomer who's already in the room, with their names
+    const existingPeers = others.map((id) => ({
+      peerId: id,
+      name: io.sockets.sockets.get(id)?.data.name || "Anonymous",
+    }));
+    socket.emit("joined", { self: socket.id, existingPeers });
 
     // Tell existing members someone new joined
-    others.forEach((id) => io.to(id).emit("peer-joined", { peerId: socket.id }));
+    others.forEach((id) =>
+      io.to(id).emit("peer-joined", { peerId: socket.id, name: socket.data.name })
+    );
   });
 
   socket.on("signal", ({ to, data }) => {
