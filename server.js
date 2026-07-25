@@ -1,66 +1,592 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const path = require("path");
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AIR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0c;
+    --bg-2: #131217;
+    --surface: #17161c;
+    --surface-hi: #1f1e26;
+    --line: #2a2932;
+    --text: #e7e4ec;
+    --text-dim: #8f8b9a;
+    --text-faint: #55525f;
+    --accent: #a48cff;
+    --accent-glow: rgba(164, 140, 255, 0.35);
+    --danger: #ff6b6b;
+    --danger-dim: rgba(255, 107, 107, 0.5);
+  }
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+  * { box-sizing: border-box; }
 
-app.use(express.static(path.join(__dirname, "public")));
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: radial-gradient(ellipse at 50% 20%, var(--bg-2) 0%, var(--bg) 70%);
+    color: var(--text);
+    font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+    overscroll-behavior-y: auto;
+  }
 
-// roomId -> Set of socket ids
-const rooms = new Map();
-const MAX_ROOM_SIZE = 6;
+  #app {
+    height: 100vh;
+    width: 100vw;
+    display: flex;
+    flex-direction: column;
+  }
 
-io.on("connection", (socket) => {
-  let currentRoom = null;
+  .mono { font-family: 'Space Mono', monospace; letter-spacing: 0.15em; }
 
-  socket.on("join", ({ roomId, name } = {}) => {
-    currentRoom = roomId;
-    socket.data.name = (name || "").trim().slice(0, 24) || "Anonymous";
-    if (!rooms.has(roomId)) rooms.set(roomId, new Set());
-    const room = rooms.get(roomId);
+  .brand {
+    position: fixed;
+    top: 28px;
+    left: 32px;
+    font-size: 14px;
+    letter-spacing: 0.5em;
+    font-weight: 400;
+    color: var(--text-dim);
+    z-index: 5;
+  }
 
-    if (room.size >= MAX_ROOM_SIZE) {
-      socket.emit("room-full");
-      currentRoom = null;
+  /* ---------- lobby ---------- */
+  #lobby {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px;
+  }
+  #lobby h1 { font-size: 40px; font-weight: 300; letter-spacing: 0.3em; margin: 0; }
+  #lobby .sub { font-size: 12px; color: var(--text-dim); letter-spacing: 0.25em; margin-top: 10px; text-transform: uppercase; }
+
+  #nameInput, #roomInput {
+    width: 280px;
+    max-width: 80vw;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--line);
+    color: var(--text);
+    text-align: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 16px;
+    letter-spacing: 0.2em;
+    padding: 10px 4px;
+    outline: none;
+    transition: border-color 0.3s;
+  }
+  #nameInput { margin-top: 56px; }
+  #roomInput { margin-top: 20px; }
+  #nameInput:focus, #roomInput:focus { border-color: var(--accent); }
+  #nameInput::placeholder, #roomInput::placeholder { color: var(--text-faint); }
+
+  #joinBtn {
+    margin-top: 40px;
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--text-dim);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    padding: 14px 36px;
+    border-radius: 100px;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+  #joinBtn:hover:not(:disabled) { border-color: var(--accent); color: var(--text); box-shadow: 0 0 24px var(--accent-glow); }
+  #joinBtn:disabled { opacity: 0.4; cursor: default; }
+
+  #lobbyStatus { margin-top: 28px; font-size: 11px; letter-spacing: 0.2em; color: var(--text-faint); min-height: 16px; }
+
+  /* ---------- call screen ---------- */
+  #callScreen { display: none; flex: 1; flex-direction: column; }
+
+  #roomLabel { position: fixed; top: 28px; right: 32px; font-size: 11px; color: var(--text-faint); letter-spacing: 0.2em; z-index: 5; }
+
+  #grid {
+    flex: 1;
+    display: grid;
+    gap: 14px;
+    padding: 100px 32px 130px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    align-content: center;
+  }
+
+  .tile {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    transition: background 0.5s, border-color 0.5s, opacity 0.5s;
+  }
+
+  .tile { --pc: var(--accent); --pc-glow: var(--accent-glow); }
+
+  .orb {
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--pc), #33304a 65%, transparent 100%);
+    opacity: 0.25;
+    transform: scale(0.85);
+    transition: opacity 0.4s ease, transform 0.4s ease, box-shadow 0.4s ease;
+  }
+
+  .tile.speaking .orb {
+    opacity: 1;
+    transform: scale(1);
+    animation: pulse 1.6s ease-in-out infinite;
+    box-shadow: 0 0 50px var(--pc-glow);
+  }
+  @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
+  .tile .name { font-size: 15px; font-weight: 400; letter-spacing: 0.05em; color: var(--text-dim); }
+  .tile.speaking .name { color: var(--text); }
+
+  .tile .state { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--text-faint); }
+  .tile.speaking .state { color: var(--pc); }
+
+  .tile.muted .orb { background: radial-gradient(circle at 35% 30%, #55525f, #2a2932 70%); opacity: 0.5; }
+  .tile.muted .state { color: var(--danger-dim); }
+  .tile.muted .name { color: var(--text-faint); }
+
+  .tile.reconnecting { animation: flicker 1.4s ease-in-out infinite; }
+  .tile.reconnecting .state { color: var(--danger); }
+  @keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+  .mute-badge {
+    position: absolute; top: 14px; right: 14px; width: 22px; height: 22px; border-radius: 50%;
+    background: rgba(255, 107, 107, 0.12); border: 1px solid var(--danger-dim);
+    display: none; align-items: center; justify-content: center; font-size: 11px; color: var(--danger);
+  }
+  .tile.muted .mute-badge { display: flex; }
+
+  /* ---------- controls ---------- */
+  #controls {
+    position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px;
+    background: rgba(23, 22, 28, 0.92); border: 1px solid var(--line);
+    backdrop-filter: blur(12px); padding: 12px 14px; border-radius: 100px; z-index: 50;
+  }
+
+  .ctrl-btn {
+    width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--line);
+    background: var(--surface-hi); color: var(--text); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    transition: all 0.25s; flex-shrink: 0;
+  }
+  .ctrl-btn svg { width: 20px; height: 20px; }
+  .ctrl-btn .ctrl-label { font-family: 'Space Mono', monospace; font-size: 8px; letter-spacing: 0.05em; color: var(--text-faint); }
+
+  #muteBtn.active { background: rgba(255, 107, 107, 0.12); border-color: var(--danger-dim); color: var(--danger); }
+  #muteBtn.active .ctrl-label { color: var(--danger-dim); }
+
+  #speakerBtn.active { background: rgba(164, 140, 255, 0.14); border-color: var(--accent); color: var(--accent); }
+  #speakerBtn.active .ctrl-label { color: var(--accent); }
+
+  #hangupBtn {
+    height: 52px; padding: 0 22px; border-radius: 100px;
+    background: var(--danger); border: 1px solid var(--danger);
+    color: #1a0808; font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer;
+    display: flex; align-items: center; gap: 8px; transition: all 0.2s; flex-shrink: 0;
+  }
+  #hangupBtn svg { width: 18px; height: 18px; }
+  #hangupBtn:hover { background: #ff8585; box-shadow: 0 0 20px rgba(255, 107, 107, 0.5); }
+
+  #callStatus {
+    position: fixed; bottom: 108px; left: 50%; transform: translateX(-50%);
+    font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 0.2em;
+    color: var(--text-faint); text-transform: uppercase; z-index: 10;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="brand mono">AIR</div>
+
+  <div id="lobby">
+    <h1>AIR</h1>
+    <div class="sub mono">Voice, only when it matters</div>
+    <input id="nameInput" class="mono" placeholder="your name" autocomplete="off" maxlength="24" />
+    <input id="roomInput" class="mono" placeholder="room code" autocomplete="off" />
+    <button id="joinBtn" class="mono">Join Call</button>
+    <div id="lobbyStatus" class="mono"></div>
+  </div>
+
+  <div id="callScreen">
+    <div id="roomLabel" class="mono"></div>
+    <div id="grid"></div>
+    <div id="callStatus" class="mono"></div>
+    <div id="controls">
+      <button id="muteBtn" class="ctrl-btn" title="Mute">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/></svg>
+        <span class="ctrl-label mono">MUTE</span>
+      </button>
+      <button id="speakerBtn" class="ctrl-btn active" title="Speaker / earpiece">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19.5 6a9 9 0 0 1 0 12"/></svg>
+        <span class="ctrl-label mono" id="speakerLabel">SPEAKER</span>
+      </button>
+      <button id="hangupBtn" title="Leave call">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-2.5 0-4.9.5-7 1.5-.6.3-1 .9-1 1.6v2.4c0 .8.6 1.5 1.4 1.5.2 0 .4 0 .5-.1l3-1c.5-.2.8-.6.9-1.1l.2-1.4c1.3-.3 2.6-.5 4-.5s2.7.2 4 .5l.2 1.4c.1.5.4.9.9 1.1l3 1c.2.1.4.1.5.1.8 0 1.4-.7 1.4-1.5v-2.4c0-.7-.4-1.3-1-1.6C16.9 9.5 14.5 9 12 9Z"/></svg>
+        End
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="audioContainer"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+
+  const lobby = document.getElementById("lobby");
+  const callScreen = document.getElementById("callScreen");
+  const joinBtn = document.getElementById("joinBtn");
+  const nameInput = document.getElementById("nameInput");
+  const roomInput = document.getElementById("roomInput");
+  const lobbyStatus = document.getElementById("lobbyStatus");
+  const roomLabel = document.getElementById("roomLabel");
+  const grid = document.getElementById("grid");
+  const callStatus = document.getElementById("callStatus");
+  const muteBtn = document.getElementById("muteBtn");
+  const speakerBtn = document.getElementById("speakerBtn");
+  const speakerLabel = document.getElementById("speakerLabel");
+  const hangupBtn = document.getElementById("hangupBtn");
+  const audioContainer = document.getElementById("audioContainer");
+
+  let localStream = null;
+  let roomId = null;
+  let localName = "You";
+  let isMuted = false;
+  let onSpeaker = true; // true = loud/speaker, false = earpiece
+  let audioCtx = null;
+  const peers = new Map();
+  const analysers = new Map();
+  let rafId = null;
+
+  // ---------- per-participant color ----------
+  const PALETTE = ["#a48cff", "#ff9f6b", "#6bd4ff", "#7bffb0", "#ff6ba8", "#ffd76b", "#8f6bff", "#6bffe0"];
+  function colorFor(key) {
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return PALETTE[h % PALETTE.length];
+  }
+  function hexToRgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+
+  let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+
+  async function loadIceServers() {
+    try {
+      const res = await fetch("https://ashborn.metered.live/api/v1/turn/credentials?apiKey=2592e5a67b1df0493a1570c59e03510cc944");
+      const servers = await res.json();
+      if (Array.isArray(servers) && servers.length) ICE_SERVERS = servers;
+    } catch (err) {
+      console.error("Failed to load TURN credentials, falling back to STUN only:", err);
+    }
+  }
+  loadIceServers();
+
+  function setLobbyStatus(text) { lobbyStatus.textContent = text; }
+  function setCallStatus(text) { callStatus.textContent = text; }
+
+  function tileId(peerId) { return "tile-" + peerId; }
+
+  function createTile(peerId, label) {
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    tile.id = tileId(peerId);
+    const c = colorFor(peerId);
+    tile.style.setProperty("--pc", c);
+    tile.style.setProperty("--pc-glow", hexToRgba(c, 0.35));
+    const safeLabel = (label || "Anonymous").replace(/</g, "&lt;");
+    tile.innerHTML = `
+      <div class="mute-badge">✕</div>
+      <div class="orb"></div>
+      <div class="name">${safeLabel}</div>
+      <div class="state mono">Connecting</div>
+    `;
+    grid.appendChild(tile);
+    return tile;
+  }
+
+  function getTile(peerId, label) {
+    return document.getElementById(tileId(peerId)) || createTile(peerId, label);
+  }
+
+  function setTileState(peerId, stateText, { speaking = false, muted = false, reconnecting = false } = {}) {
+    const tile = document.getElementById(tileId(peerId));
+    if (!tile) return;
+    tile.classList.toggle("speaking", speaking);
+    tile.classList.toggle("muted", muted);
+    tile.classList.toggle("reconnecting", reconnecting);
+    const stateEl = tile.querySelector(".state");
+    if (stateEl) stateEl.textContent = stateText;
+  }
+
+  function removeTile(peerId) {
+    const tile = document.getElementById(tileId(peerId));
+    if (tile) tile.remove();
+    analysers.delete(peerId);
+  }
+
+  function watchVolume(peerId, stream) {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    analysers.set(peerId, { analyser, data });
+    if (!rafId) tickVolumes();
+  }
+
+  function tickVolumes() {
+    analysers.forEach(({ analyser, data }, peerId) => {
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      const tile = document.getElementById(tileId(peerId));
+      if (!tile || tile.classList.contains("muted") || tile.classList.contains("reconnecting")) return;
+      const speaking = avg > 14;
+      tile.classList.toggle("speaking", speaking);
+      const stateEl = tile.querySelector(".state");
+      if (stateEl) stateEl.textContent = speaking ? "Speaking" : "Listening";
+    });
+    rafId = requestAnimationFrame(tickVolumes);
+  }
+
+  function stopVolumeWatch() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    analysers.clear();
+  }
+
+  function updateMuteUI() {
+    muteBtn.classList.toggle("active", isMuted);
+    const tile = getTile("local", localName + " (you)");
+    tile.classList.toggle("muted", isMuted);
+    setTileState("local", isMuted ? "Muted" : "Listening", { muted: isMuted });
+  }
+
+  function toggleMute() {
+    if (!localStream) return;
+    isMuted = !isMuted;
+    localStream.getAudioTracks().forEach((t) => (t.enabled = !isMuted));
+    updateMuteUI();
+  }
+
+  // ---------- speaker / earpiece ----------
+  // Only a few Android/Chrome-based browsers expose real earpiece vs speaker
+  // output devices via setSinkId; elsewhere this just toggles playback volume
+  // as a reasonable fallback so the control still does something meaningful.
+  async function findOutputDeviceId(wantEarpiece) {
+    if (!navigator.mediaDevices?.enumerateDevices) return null;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = devices.filter((d) => d.kind === "audiooutput");
+      const match = outputs.find((d) =>
+        wantEarpiece ? /ear/i.test(d.label) : /speaker/i.test(d.label)
+      );
+      return match ? match.deviceId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function applySinkTo(audioEl) {
+    if (!audioEl) return;
+    if (typeof audioEl.setSinkId === "function") {
+      const deviceId = await findOutputDeviceId(!onSpeaker);
+      if (deviceId) {
+        try { await audioEl.setSinkId(deviceId); } catch { /* device switch not supported here */ }
+      }
+    }
+    // Fallback / universal cue: earpiece mode plays quieter, speaker mode is full volume.
+    audioEl.volume = onSpeaker ? 1.0 : 0.55;
+  }
+
+  function applySinkToAll() {
+    audioContainer.querySelectorAll("audio").forEach(applySinkTo);
+  }
+
+  function toggleSpeaker() {
+    onSpeaker = !onSpeaker;
+    speakerBtn.classList.toggle("active", onSpeaker);
+    speakerLabel.textContent = onSpeaker ? "SPEAKER" : "EARPIECE";
+    applySinkToAll();
+  }
+
+  async function joinCall() {
+    roomId = roomInput.value.trim();
+    localName = nameInput.value.trim().slice(0, 24) || "Anonymous";
+    if (!roomId) { setLobbyStatus("enter a room code first"); return; }
+
+    joinBtn.disabled = true;
+    setLobbyStatus("setting up connection...");
+    await loadIceServers();
+
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (err) {
+      setLobbyStatus("microphone permission required");
+      joinBtn.disabled = false;
       return;
     }
 
-    const others = [...room]; // existing members before adding self
-    room.add(socket.id);
-    socket.join(roomId);
+    lobby.style.display = "none";
+    callScreen.style.display = "flex";
+    roomLabel.textContent = roomId;
 
-    // Tell the newcomer who's already in the room, with their names
-    const existingPeers = others.map((id) => ({
-      peerId: id,
-      name: io.sockets.sockets.get(id)?.data.name || "Anonymous",
-    }));
-    socket.emit("joined", { self: socket.id, existingPeers });
+    getTile("local", localName + " (you)");
+    watchVolume("local", localStream);
+    updateMuteUI();
+    applySinkToAll();
+    setCallStatus("waiting for others to join...");
 
-    // Tell existing members someone new joined
-    others.forEach((id) =>
-      io.to(id).emit("peer-joined", { peerId: socket.id, name: socket.data.name })
-    );
-  });
+    socket.emit("join", { roomId, name: localName });
+  }
 
-  socket.on("signal", ({ to, data }) => {
-    io.to(to).emit("signal", { from: socket.id, data });
-  });
+  const peerNames = new Map();
 
-  socket.on("hangup", () => {
-    if (currentRoom) socket.to(currentRoom).emit("peer-left", { peerId: socket.id });
-  });
+  function createPeerConnection(peerId, label) {
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    peers.set(peerId, pc);
 
-  socket.on("disconnect", () => {
-    if (currentRoom && rooms.has(currentRoom)) {
-      rooms.get(currentRoom).delete(socket.id);
-      socket.to(currentRoom).emit("peer-left", { peerId: socket.id });
-      if (rooms.get(currentRoom).size === 0) rooms.delete(currentRoom);
+    localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+    getTile(peerId, label || peerNames.get(peerId) || "Anonymous");
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) socket.emit("signal", { to: peerId, data: { candidate: event.candidate } });
+    };
+
+    pc.ontrack = (event) => {
+      let audioEl = document.getElementById("audio-" + peerId);
+      if (!audioEl) {
+        audioEl = document.createElement("audio");
+        audioEl.id = "audio-" + peerId;
+        audioEl.autoplay = true;
+        audioEl.playsInline = true;
+        audioContainer.appendChild(audioEl);
+      }
+      audioEl.srcObject = event.streams[0];
+      applySinkTo(audioEl);
+      watchVolume(peerId, event.streams[0]);
+      setTileState(peerId, "Listening");
+      setCallStatus("connected — call in progress");
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "disconnected") {
+        setTileState(peerId, "Reconnecting", { reconnecting: true });
+      } else if (["failed", "closed"].includes(pc.connectionState)) {
+        removePeer(peerId);
+      } else if (pc.connectionState === "connected") {
+        setTileState(peerId, "Listening");
+      }
+    };
+
+    return pc;
+  }
+
+  function removePeer(peerId) {
+    const pc = peers.get(peerId);
+    if (pc) { pc.close(); peers.delete(peerId); }
+    const audioEl = document.getElementById("audio-" + peerId);
+    if (audioEl) audioEl.remove();
+    removeTile(peerId);
+    if (peers.size === 0 && localStream) setCallStatus("waiting for others to join...");
+  }
+
+  async function callPeer(peerId) {
+    const pc = createPeerConnection(peerId);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit("signal", { to: peerId, data: { sdp: offer } });
+  }
+
+  socket.on("joined", async ({ existingPeers }) => {
+    for (const p of existingPeers) {
+      peerNames.set(p.peerId, p.name);
+      await callPeer(p.peerId);
     }
   });
-});
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`AIR call server running on port ${PORT}`));
+  socket.on("room-full", () => {
+    alert("This room already has 6 people in it (max for group calls). Try a different code.");
+    hangup();
+  });
+
+  socket.on("peer-joined", async ({ peerId, name }) => {
+    peerNames.set(peerId, name);
+  });
+
+  socket.on("signal", async ({ from, data }) => {
+    let pc = peers.get(from);
+    if (!pc) pc = createPeerConnection(from);
+
+    if (data.sdp) {
+      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      if (data.sdp.type === "offer") {
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("signal", { to: from, data: { sdp: answer } });
+      }
+    } else if (data.candidate) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+      catch (e) { console.error("ICE candidate error", e); }
+    }
+  });
+
+  socket.on("peer-left", ({ peerId }) => removePeer(peerId));
+
+  function hangup() {
+    socket.emit("hangup");
+    peers.forEach((pc) => pc.close());
+    peers.clear();
+    audioContainer.innerHTML = "";
+    grid.innerHTML = "";
+    stopVolumeWatch();
+    if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+
+    isMuted = false;
+    onSpeaker = true;
+    speakerBtn.classList.add("active");
+    speakerLabel.textContent = "SPEAKER";
+    peerNames.clear();
+    callScreen.style.display = "none";
+    lobby.style.display = "flex";
+    joinBtn.disabled = false;
+    roomInput.value = "";
+    setLobbyStatus("");
+    setCallStatus("");
+
+    socket.disconnect();
+    socket.connect();
+  }
+
+  joinBtn.addEventListener("click", joinCall);
+  hangupBtn.addEventListener("click", hangup);
+  muteBtn.addEventListener("click", toggleMute);
+  speakerBtn.addEventListener("click", toggleSpeaker);
+  roomInput.addEventListener("keydown", (e) => { if (e.key === "Enter") joinCall(); });
+</script>
+</body>
+</html>
