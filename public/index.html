@@ -51,7 +51,12 @@
     color: var(--ink);
     font-family: 'Space Mono', monospace;
     overscroll-behavior-y: auto;
+    -webkit-tap-highlight-color: transparent;
   }
+
+  * { -webkit-tap-highlight-color: transparent; }
+  button, input, .tile, a { -webkit-tap-highlight-color: transparent; outline: none; }
+  button:focus, input:focus { outline: none; }
 
   .heading {
     font-family: 'Bungee', sans-serif;
@@ -61,12 +66,13 @@
   }
 
   #app {
-    height: 100vh;
+    min-height: 100vh;
     width: 100vw;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 18px;
+    touch-action: pan-y;
   }
 
   .panel {
@@ -115,6 +121,7 @@
     box-shadow: var(--shadow-sm);
     transition: transform 0.08s ease, box-shadow 0.08s ease;
     color: var(--ink);
+    touch-action: manipulation;
   }
   .btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
   .btn:disabled { opacity: 0.5; cursor: default; }
@@ -214,6 +221,7 @@
     background: var(--blue); color: var(--ink); cursor: pointer;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
     box-shadow: var(--shadow-sm); transition: transform 0.08s, box-shadow 0.08s; flex-shrink: 0;
+    touch-action: manipulation;
   }
   .ctrl-btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
   .ctrl-btn svg { width: 20px; height: 20px; }
@@ -231,7 +239,7 @@
     color: var(--cream); font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700;
     letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer;
     display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow-sm);
-    transition: transform 0.08s, box-shadow 0.08s; flex-shrink: 0;
+    transition: transform 0.08s, box-shadow 0.08s; flex-shrink: 0; touch-action: manipulation;
   }
   #hangupBtn svg { width: 18px; height: 18px; }
   #hangupBtn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
@@ -248,6 +256,7 @@
     <input id="nameInput" class="field" placeholder="your name" autocomplete="off" maxlength="24" />
     <input id="roomInput" class="field" placeholder="room code" autocomplete="off" />
     <button id="joinBtn" class="btn">Join Call</button>
+    <button id="installBtn" class="btn btn-green" style="display:none; margin-top:10px; width:100%;">Install App</button>
     <div id="lobbyStatus"></div>
   </div>
 
@@ -622,6 +631,38 @@
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("/sw.js").catch((err) => console.error("SW registration failed:", err));
     });
+  }
+
+  // ---------- installability ----------
+  // Chrome's automatic install banner only shows once certain engagement
+  // heuristics are met, which can feel like "nothing happens." Capturing
+  // beforeinstallprompt lets us offer a reliable, always-visible button instead.
+  const installBtn = document.getElementById("installBtn");
+  let deferredInstallPrompt = null;
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    installBtn.style.display = "block";
+  });
+
+  installBtn.addEventListener("click", async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installBtn.style.display = "none";
+  });
+
+  window.addEventListener("appinstalled", () => {
+    installBtn.style.display = "none";
+  });
+
+  // iOS Safari never fires beforeinstallprompt — give a one-time text hint instead.
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  if (isIos && !isStandalone) {
+    setLobbyStatus("on iPhone: tap Share → Add to Home Screen to install");
   }
 </script>
 </body>
