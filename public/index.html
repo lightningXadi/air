@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>AIR</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#0a0a0c" />
+<link rel="icon" href="/icons/icon-192.png" />
+<link rel="apple-touch-icon" href="/icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="AIR" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
@@ -30,7 +39,7 @@
     background: radial-gradient(ellipse at 50% 20%, var(--bg-2) 0%, var(--bg) 70%);
     color: var(--text);
     font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
-    overflow: hidden;
+    overscroll-behavior-y: auto;
   }
 
   #app {
@@ -587,6 +596,12 @@
   muteBtn.addEventListener("click", toggleMute);
   speakerBtn.addEventListener("click", toggleSpeaker);
   roomInput.addEventListener("keydown", (e) => { if (e.key === "Enter") joinCall(); });
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch((err) => console.error("SW registration failed:", err));
+    });
+  }
 </script>
 </body>
 </html>
